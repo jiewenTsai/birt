@@ -1,0 +1,186 @@
+---
+title: "Getting started with birt"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting started with birt}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(eval = FALSE)
+```
+
+`birt` fits item response theory models with one or two latent variables from
+lavaan-style syntax. Typical use: a joint model of response accuracy (binary items, logit
+link) and log response times, with ability and speed; or a Likert scale moderated by a
+total response time.
+
+By default `birt(model, data)` fits the model by **ELGM**, approximate Bayesian inference
+for extended latent Gaussian models (Stringer, Brown & Stafford, 2023), in 'RTMB':
+
+* the person latents are integrated out of the likelihood by per-person adaptive
+  Gauss-Hermite quadrature (AGHQ), giving the marginal likelihood;
+* the posterior of the remaining parameters, with the priors of `dpriors()`, is integrated
+  by an outer adaptive quadrature over the hyperparameters (Gaussian in the other
+  directions);
+* the output has posterior means, SDs, 95% intervals and the log marginal likelihood, so
+  `compare()` gives Bayes factors.
+
+The same marginal likelihood can be maximized instead (`rtmb_control(method = "aghq")`):
+maximum likelihood, needed by `score_test()`, `quantile_score()` and `dif_tree()`, and the
+natural choice for AIC / BIC. The JAGS engine (`engine = "jags"`, optional) samples the
+conditional likelihood and is needed for spike-and-slab priors, `ald()` quantile models,
+DIC / WAIC / PSIS-LOO and `ppc()`.
+
+## 1. Model and fit (ELGM)
+
+```{r}
+library(birt)
+d <- sim_rtirt(N = 500, K = 10)        # y1..y10 (0/1), t1..t10 (log RT), x1, x2
+items <- paste0("y", 1:10); times <- paste0("t", 1:10)
+
+model <- rtirt_syntax(items, times)    # van der Linden (2007)
+cat(model)                             # ability =~ y's; speed =~ -1*t's; ability ~~ speed
+
+fit <- birt(model, data = d)           # ELGM (default), about 20 s
+fit                                    # log marginal likelihood, inner / outer quadrature
+summary(fit)                           # posterior means, SDs, 95% intervals, priors
+```
+
+* The first `=~` line of a factor gives its measurement loadings; later lines add
+  cross-loadings (e.g. `rtirt_syntax(items, times, cross = "free")`: ability on each log RT,
+  Bolsinova & Tijmstra, 2018).
+* `ability` has variance 1 (it has free loadings); `speed`, whose loadings are all fixed,
+  has a free variance; they are uncorrelated unless `ability ~~ speed` is added.
+* Priors: defaults from `dpriors()` (`dp = dpriors(cross = "dnorm(0, 100)")` changes a
+  class), or `prior("dnorm(0, 100)")*t1` for one parameter (JAGS precision
+  parameterization).
+
+## 2. What the object holds
+
+```{r}
+estimates(fit)          # lavaan-like table: est, sd, q025, q975, prior
+scores(fit)             # EAP and posterior SD per person and latent variable
+reliability(fit)        # var(EAP) / (var(EAP) + mean PSD^2)
+summary(fit)$items      # a, b (IRT parameterization), RT intercepts, loadings, variances
+fit_indices(fit)        # log marginal likelihood
+convergence(fit)        # optimizer, outer nodes, quadrature check
+equations(fit)          # the model as equations (format = "latex" for a paper)
+algorithm(fit)          # how the fit was computed, step by step
+```
+
+## 3. Model comparison
+
+```{r}
+fc <- birt(rtirt_syntax(items, times, cross = "free"), d)      # item cross-loadings
+fi <- birt(sub("ability ~~ speed", "", model, fixed = TRUE), d)  # independent
+compare(correlated = fit, cross = fc, independent = fi)          # logML, Bayes factors
+
+# maximum likelihood: AIC and BIC
+ml  <- birt(model, d, control = rtmb_control(method = "aghq"))
+mlc <- birt(rtirt_syntax(items, times, cross = "free"), d, control = rtmb_control(method = "aghq"))
+compare(correlated = ml, cross = mlc)
+```
+
+Marginal likelihoods depend on the priors; report them with the priors.
+
+## 4. Distributional models and quantiles
+
+Instead of normal residuals, `shash()` gives sinh-arcsinh residuals (skewness, tail
+weight); `V(y) ~ z` in the syntax moderates a log scale. `quantiles(fit, p)` then gives the
+effects on every conditional quantile from one fit, with simultaneous bands over `p`;
+`quantile_test()` tests whether an effect changes with `p`.
+
+```{r}
+reg <- rtirt_syntax(items, times, structure = "path", cov = c("x1", "x2"))  # speed ~ ability + x1 + x2
+fs <- birt(reg, d, family = list(speed = shash()), control = rtmb_control(k_hyper = 13))
+
+m5 <- paste(rtirt_syntax(items, times, cross = "free"),
+            sprintf("V(%s) ~ ability", paste(times, collapse = " + ")), sep = "\n")
+f5 <- birt(m5, d)
+quantiles(f5, p = c(0.1, 0.5, 0.9))
+quantile_test(f5, p = c(0.1, 0.5, 0.9))
+cond_reliability(f5)    # reliability of ability given its value: accuracy, RT, both
+rt_information(f5)      # where the RT information lies; what a time limit keeps
+```
+
+If ELGM warns that the posterior is too wide for the outer grid along a hyperparameter
+(more mass on its two outermost nodes than a Gaussian posterior 1.5 times wider would put
+there, and at least 2.5%), check whether that parameter is weakly determined and increase
+`rtmb_control(k_hyper = )`.
+
+## 5. Maximum likelihood tools
+
+```{r}
+score_test(ml, d$x1 > 0, by_item = TRUE)   # measurement invariance from one fit
+score_test(ml, rowSums(d[times]))          # along the total log time
+qs <- quantile_score(birt(m5, d, control = rtmb_control(method = "aghq")), p = 0.9)
+qs                                         # influence functions, robust SEs
+score_test(qs, d$x2)
+rtmb_code(ml)                              # a stand-alone RTMB script
+```
+
+`dif_tree(model, data, partition)` (package partykit) grows a DIF tree with these tests.
+
+## 6. Ordinal indicators moderated by a response time
+
+With `ordered = TRUE` the indicators are ordinal (graded response model) and person-level
+moderators enter as moderation statements on conditional moments, as in MNLFA:
+`E(y1 + y2) ~ z` shifts the thresholds (uniform DIF), `E(y1) ~ z:f` moderates the
+discrimination (nonuniform DIF), `E(f) ~ z` and `V(f) ~ z` the latent mean and variance.
+`hgrm()` writes this syntax from a few options; both fit by ELGM by default.
+
+```{r}
+dh <- sim_hgrm(N = 600, J = 8)
+dh$logT <- as.numeric(scale(dh$logT))
+m <- 'SA =~ y1 + y2 + y3 + y4 + y5 + y6 + y7 + y8
+      E(y1 + y2 + y3 + y4 + y5 + y6 + y7 + y8) ~ pa*logT:SA
+      E(y1 + y2) ~ logT
+      E(SA) ~ logT'
+f_ord <- birt(m, dh, ordered = TRUE)
+summary(f_ord)
+ordinal_information(f_ord)
+
+h0 <- hgrm("SA =~ y1 + y2 + y3 + y4 + y5 + y6 + y7 + y8", dh, moderators = "logT",
+           control = rtmb_control(method = "aghq"))
+score_test(h0, dh$logT, by_item = TRUE)    # DIF screen, item by item
+```
+
+## 7. The JAGS engine (optional)
+
+```{r}
+fit_ssp <- birt(rtirt_syntax(items, times, cross = "ssp"), d, engine = "jags")
+summary(fit_ssp)$selection    # spike-and-slab: inclusion probabilities, Bayes factors
+compare(M2b = fit_ssp, M1 = birt(model, d, engine = "jags"))   # LOOIC, ELPD
+ppc(fit_ssp)                  # posterior predictive checks incl. conditional dependence
+jags_code(fit_ssp)            # the JAGS model
+q <- birt(reg, d, family = list(speed = ald(c(0.1, 0.5, 0.9))), engine = "jags")
+```
+
+## 8. Notes
+
+* Covariates are used as given (standardize them) and may not be missing; indicators may
+  be missing at random.
+* The log-likelihood of response times is that of the log times (no Jacobian), the same
+  for `log_rt = TRUE` and for data that are already logged; do not compare it with models
+  for times in seconds.
+* With ALD indicators the JAGS fit indices are slow; use `fit_indices = FALSE` and
+  `add_fit_indices(fit, n_draws = 200)` later. Posterior intervals under ALD working
+  likelihoods can be too narrow (Yang, Wang & He, 2016).
+
+## References
+
+Bolsinova, M., & Tijmstra, J. (2018). Improving precision of ability estimation: Getting
+more from response times. *British Journal of Mathematical and Statistical Psychology, 71*,
+13-38.
+
+Stringer, A., Brown, P., & Stafford, J. (2023). Fast, scalable approximations to posterior
+distributions in extended latent Gaussian models. *Journal of Computational and Graphical
+Statistics, 32*, 84-98. https://doi.org/10.1080/10618600.2022.2099403
+
+van der Linden, W. J. (2007). A hierarchical framework for modeling speed and accuracy on
+test items. *Psychometrika, 72*, 287-308.
+
+Yang, Y., Wang, H. J., & He, X. (2016). Posterior inference in Bayesian quantile regression
+with asymmetric Laplace likelihood. *International Statistical Review, 84*, 327-344.

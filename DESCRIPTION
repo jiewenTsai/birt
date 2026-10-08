@@ -1,0 +1,32 @@
+Package: birt
+Type: Package
+Title: BIvariate Response Time Modeling with 'lavaan'-Style Syntax
+Version: 0.1.0
+Authors@R: person("Jie-Wen", "Tsai", role = c("aut", "cre"), email = "tsai.jiewen@gmail.com")
+Description: Fits item response theory models with one or two latent variables, for
+    example ability and speed in joint models of response accuracy and response time
+    (van der Linden, 2007, <doi:10.1007/s11336-006-1478-z>), from 'lavaan'-style model
+    syntax. The main engine fits the syntax in 'RTMB' by approximate Bayesian inference as an
+    extended latent Gaussian model (Stringer, Brown and Stafford, 2023,
+    <doi:10.1080/10618600.2022.2099403>): the persons are integrated out by adaptive
+    Gauss-Hermite quadrature and the remaining parameters by an outer adaptive quadrature, with
+    marginal likelihoods for model comparison; the same engine gives maximum likelihood, with
+    casewise scores for score-based invariance tests and DIF trees. Ordinal and continuous
+    indicators, moderated nonlinear factor analysis statements, sinh-arcsinh residuals (Jones
+    and Pewsey, 2009, <doi:10.1093/biomet/asp053>) whose quantile effects at every level come
+    from one fit, conditional reliability and the information of each quantile regression of
+    the response times.
+    An optional 'JAGS' engine translates the model into a plain 'JAGS' model file, for
+    spike-and-slab priors and asymmetric Laplace (quantile) distributions, with
+    marginal-likelihood fit indices (DIC, WAIC, PSIS-LOO) and posterior predictive checks.
+License: GPL-3
+URL: https://github.com/jiewenTsai/birt, https://github.com/jiewenTsai/birtExamples
+BugReports: https://github.com/jiewenTsai/birt/issues
+Encoding: UTF-8
+Depends: R (>= 4.1.0)
+Imports: lavaan, RTMB (>= 1.7), coda, loo, statmod, stats, utils, graphics, grDevices, parallel
+Suggests: R2jags, rjags, mirt, Matrix, callr, pkgload, testthat (>= 3.0.0), knitr, rmarkdown, strucchange, sandwich, partykit
+SystemRequirements: JAGS (>= 4.3.0) for engine = "jags" (optional)
+VignetteBuilder: knitr
+Config/testthat/edition: 3
+RoxygenNote: 7.3.2
